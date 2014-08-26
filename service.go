@@ -1,36 +1,42 @@
+// Package revproxy ...
 package revproxy
 
 import (
-	"regexp"
 	"fmt"
-	"strconv"
 	"log"
 	"net/http"
-	"sort"
 	"net/http/httputil"
 	"net/url"
+	"regexp"
+	"sort"
+	"strconv"
 )
 
+// _Endpoint
 type _Endpoint struct {
-	prefix  string
-	port    int
-	re *regexp.Regexp
+	prefix    string
+	port      int
+	re        *regexp.Regexp
 	targetURL *url.URL
-	handler http.Handler
+	handler   http.Handler
 }
 
+// endpoints
 var endpoints []_Endpoint
 
+// port to bind
 var port int
 
+// Port sets the port
 func Port(portToSet int) {
 	port = portToSet
 }
 
-func make_endpoint(loc string) (*_Endpoint, error) {
-	PATTERN_ENDPOINT := regexp.MustCompile(`/(\w*):(\d+)`)
+// makeEndpoint creates an endpoint
+func makeEndpoint(loc string) (*_Endpoint, error) {
+	endpointRe := regexp.MustCompile(`/(\w*):(\d+)`)
 
-	elements := PATTERN_ENDPOINT.FindStringSubmatch(loc)
+	elements := endpointRe.FindStringSubmatch(loc)
 
 	if 3 != len(elements) {
 		return nil, fmt.Errorf("Invalid Path '%s'. Must match /<path>:<port>", loc)
@@ -41,31 +47,31 @@ func make_endpoint(loc string) (*_Endpoint, error) {
 
 	urlAsString := fmt.Sprintf("http://127.0.0.1:%d/", port)
 
-	targetUrl, err := url.Parse(urlAsString)
+	targetURL, err := url.Parse(urlAsString)
 
 	if nil != err {
 		log.Fatal(err)
 	}
 
-	handler := make_handler(targetUrl)
+	handler := makeHandler(targetURL)
 
-	path_re := regexp.MustCompile(fmt.Sprintf("^/%s(/.*)?", prefix))
+	pathRe := regexp.MustCompile(fmt.Sprintf("^/%s(/.*)?", prefix))
 
-	new_endpoint := &_Endpoint{ "/" + prefix, port, path_re, targetUrl, handler }
+	newEndpoint := &_Endpoint{"/" + prefix, port, pathRe, targetURL, handler}
 
-	return new_endpoint, nil
+	return newEndpoint, nil
 }
 
-func make_handler(target *url.URL) *httputil.ReverseProxy {
+func makeHandler(target *url.URL) *httputil.ReverseProxy {
 	targetQuery := target.RawQuery
 	director := func(req *http.Request) {
 		req.URL.Scheme = target.Scheme
 		req.URL.Host = target.Host
 
 		if targetQuery == "" || req.URL.RawQuery == "" {
-			req.URL.RawQuery = targetQuery+req.URL.RawQuery
+			req.URL.RawQuery = targetQuery + req.URL.RawQuery
 		} else {
-			req.URL.RawQuery = targetQuery+"&"+req.URL.RawQuery
+			req.URL.RawQuery = targetQuery + "&" + req.URL.RawQuery
 		}
 	}
 	return &httputil.ReverseProxy{Director: director}
@@ -73,21 +79,22 @@ func make_handler(target *url.URL) *httputil.ReverseProxy {
 
 type _ByLen []_Endpoint
 
-func (a _ByLen) Len() int { return len(a) }
-func (a _ByLen) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+func (a _ByLen) Len() int           { return len(a) }
+func (a _ByLen) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a _ByLen) Less(i, j int) bool { return len(a[i].prefix) > len(a[j].prefix) }
 
+// LoadEndpoints parses the cli and builds the relation of available endpoints
 func LoadEndpoints(args []string) {
 	endpoints = make([]_Endpoint, len(args))
 
 	for i, v := range args {
-		new_endpoint, err := make_endpoint(v)
+		newEndpoint, err := makeEndpoint(v)
 
 		if nil != err {
 			log.Fatal(err)
 		}
 
-		endpoints[i] = *new_endpoint
+		endpoints[i] = *newEndpoint
 	}
 
 	sort.Sort(_ByLen(endpoints))
@@ -97,7 +104,6 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 	matchingServerOf := func(url *url.URL) (http.Handler, bool) {
 		for _, v := range endpoints {
 			if v.re.MatchString(url.Path) {
-				log.Println(" -> ", v.targetURL.RequestURI())
 				return v.handler, true
 			}
 		}
@@ -115,6 +121,7 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 	http.NotFound(w, r)
 }
 
+// Run launches the HTTP Daemon
 func Run() {
 	log.Println("Defined Endpoints:")
 
