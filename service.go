@@ -3,6 +3,7 @@ package revproxy
 
 import (
 	"fmt"
+	"github.com/coreos/go-etcd/etcd"
 	"log"
 	"net/http"
 	"net/http/httputil"
@@ -22,18 +23,43 @@ type _Endpoint struct {
 }
 
 // endpoints
-var endpoints []_Endpoint
+var (
+	endpoints       = make(map[string]_Endpoint)
+	endpointList    []_Endpoint
+	port            int
+	client          *etcd.Client
+	endpointChannel = make(chan string)
+	defaultHost     = "127.0.0.1"
+)
 
-// port to bind
-var port int
+func DefaultHost(defaultHostToSet string) {
+	defaultHost = defaultHostToSet
+}
 
 // Port sets the port
 func Port(portToSet int) {
 	port = portToSet
 }
 
-// makeEndpoint creates an endpoint
-func makeEndpoint(loc string) (*_Endpoint, error) {
+func init() {
+	go func() {
+		for {
+			select {
+			case endpointUpdate := <-endpointChannel:
+				{
+					_, err := updateEndpoint(endpointUpdate)
+
+					if nil != err {
+						fmt.Println("Error for endpoint", endpointUpdate, ":", err)
+					}
+				}
+			}
+		}
+	}()
+}
+
+// updateEndpoint updates endpoints. If port is set to Zero, its removed
+func updateEndpoint(loc string) (*_Endpoint, error) {
 	endpointRe := regexp.MustCompile(`/(\w*):(\d+)`)
 
 	elements := endpointRe.FindStringSubmatch(loc)
@@ -43,9 +69,24 @@ func makeEndpoint(loc string) (*_Endpoint, error) {
 	}
 
 	prefix := elements[1]
+
+	if "default" == prefix {
+		prefix = ""
+	}
+
 	port, _ := strconv.Atoi(elements[2])
 
-	urlAsString := fmt.Sprintf("http://127.0.0.1:%d/", port)
+	if 0 == port {
+		delete(endpoints, prefix)
+
+		fmt.Println(fmt.Sprintf("Excluding endpoint for '%s'", prefix))
+
+		updateEndpoints()
+
+		return nil, nil
+	}
+
+	urlAsString := fmt.Sprintf("http://%s:%d/", defaultHost, port)
 
 	targetURL, err := url.Parse(urlAsString)
 
@@ -59,7 +100,27 @@ func makeEndpoint(loc string) (*_Endpoint, error) {
 
 	newEndpoint := &_Endpoint{"/" + prefix, port, pathRe, targetURL, handler}
 
+	endpoints[prefix] = *newEndpoint
+
+	fmt.Println("Adding new endpoint: ", endpoints[prefix])
+
+	updateEndpoints()
+
 	return newEndpoint, nil
+}
+
+func updateEndpoints() {
+	newEndpointList := make([]_Endpoint, len(endpoints))
+
+	j := 0
+	for _, v := range endpoints {
+		newEndpointList[j] = v
+		j++
+	}
+
+	sort.Sort(_ByLen(newEndpointList))
+
+	endpointList = newEndpointList
 }
 
 func makeHandler(target *url.URL) *httputil.ReverseProxy {
@@ -83,26 +144,34 @@ func (a _ByLen) Len() int           { return len(a) }
 func (a _ByLen) Swap(i, j int)      { a[i], a[j] = a[j], a[i] }
 func (a _ByLen) Less(i, j int) bool { return len(a[i].prefix) > len(a[j].prefix) }
 
-// LoadEndpoints parses the cli and builds the relation of available endpoints
-func LoadEndpoints(args []string) {
-	endpoints = make([]_Endpoint, len(args))
-
-	for i, v := range args {
-		newEndpoint, err := makeEndpoint(v)
-
-		if nil != err {
-			log.Fatal(err)
-		}
-
-		endpoints[i] = *newEndpoint
+func Discovery(discoveryURL string) {
+	if "" == discoveryURL {
+		return
 	}
 
-	sort.Sort(_ByLen(endpoints))
+	fmt.Println("Using discovery url: ", discoveryURL)
+
+	machines, err := GetEtcdHosts(discoveryURL)
+
+	if nil != err {
+		panic(err)
+	}
+
+	fmt.Println("Using etcd endpoints: ", machines)
+
+	client = etcd.NewClient(machines)
+}
+
+// LoadEndpoints parses the cli and builds the relation of available endpoints
+func LoadEndpoints(args []string) {
+	for _, v := range args {
+		updateEndpoint(v)
+	}
 }
 
 func proxy(w http.ResponseWriter, r *http.Request) {
 	matchingServerOf := func(url *url.URL) (http.Handler, bool) {
-		for _, v := range endpoints {
+		for _, v := range endpointList {
 			if v.re.MatchString(url.Path) {
 				return v.handler, true
 			}
@@ -123,6 +192,8 @@ func proxy(w http.ResponseWriter, r *http.Request) {
 
 // Run launches the HTTP Daemon
 func Run() {
+	StartEtcd()
+
 	log.Println("Defined Endpoints:")
 
 	for i, v := range endpoints {
