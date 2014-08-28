@@ -1,8 +1,8 @@
 package main
 
 import (
-	"bitbucket.org/aldrinleal/revproxy"
 	"flag"
+	"github.com/aldrinleal/revproxy"
 )
 
 var (
