@@ -11,7 +11,7 @@ var (
 	receiver    chan *etcd.Response
 )
 
-const ETCD_PREFIX = "/apps/revproxy/apps"
+var ETCD_PREFIX = "/apps/revproxy/apps"
 
 const (
 	put = iota
@@ -30,7 +30,15 @@ func updateNode(op int, node etcd.Node) {
 	endpointChannel <- message
 }
 
+func EtcdPrefix(newPrefix string) {
+	ETCD_PREFIX = newPrefix
+}
+
 func StartEtcd() {
+	if nil == client {
+		return
+	}
+
 	receiver = make(chan *etcd.Response)
 	stopChannel := make(chan bool)
 	errCh := make(chan error, 1)
