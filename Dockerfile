@@ -1,7 +1,6 @@
-FROM ubuntu:14.04
+FROM aldrinleal/godeb-base
 
-RUN sudo apt-get update ; sudo apt-get -y install curl unzip
-RUN bash -xe -c "curl -vLo /tmp/revproxy.zip 'http://beta.gobuild.io/download?os=linux&arch=amd64&rid=329' ; mkdir /app ; cd /app ; unzip /tmp/revproxy.zip"
+RUN go get github.com/aldrinleal/revproxy/revproxy
 
 EXPOSE 80
 
